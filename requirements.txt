@@ -1,0 +1,17 @@
+attrs==17.4.0
+boto3==1.9.159
+botocore==1.12.159
+certifi==2019.3.9
+chardet==3.0.4
+dataclasses==0.6
+-e git+https://github.com/kapilt/dynamoclasses.git@31f94513e3b9d2d8596d7b08bebb77678ca5860d#egg=dynamoclasses
+elasticsearch==7.0.2
+enum-compat==0.0.2
+idna==2.8
+jmespath==0.9.4
+python-dateutil==2.8.0
+requests==2.22.0
+requests-aws4auth==0.9
+s3transfer==0.2.0
+six==1.12.0
+urllib3==1.25.3

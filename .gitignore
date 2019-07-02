@@ -1,0 +1,12 @@
+.chalice/deployments/
+.chalice/venv/
+__pycache__/
+.Python
+lib/
+bin/
+src/
+include/
+module/.terraform
+module/deployment.zip
+module/chalice.tf.json
+module/*tfstate*
