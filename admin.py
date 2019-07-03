@@ -1,3 +1,4 @@
+import boto3
 import click
 import os
 import app
@@ -9,9 +10,16 @@ GITTER_TOKEN = os.environ.get('GITTER_TOKEN')
 assert GITTER_TOKEN, "Environment variable for GITTER_TOKEN required"
 assert app.TABLE_GITTER, "Environment variable for TABLE_GITTER required"
 
+
 @click.group()
 def cli():
     """GitterSearch Admin"""
+
+
+@cli.command(name='db-rooms')
+def db_rooms():
+    for r in app.Room.get_all():
+        print(r)
 
 
 @cli.command(name='list-rooms')
@@ -50,17 +58,16 @@ def add_room(ctx, name):
         UserCount=room['userCount'],
         LastSeen=None,
         OneToOne=None,
-        Tags=','.join(room['tags']),
+        State='Importing',
+        Tags=room['tags'] and ','.join(room['tags']) or None,
         Version=str(room['v'])
     )
-    try:
-        r.save()
-    except:
-        import pdb, sys, traceback
-        traceback.print_exc()
-        pdb.post_mortem(sys.exc_info()[-1])
+
+    r.save()
     print(result)
+    print("invoke ingesting")
+    print(app.invoke_fetch(r))
 
-
+    
 if __name__ == '__main__':
     cli()

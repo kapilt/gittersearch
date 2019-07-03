@@ -1,3 +1,4 @@
+from dataclasses import asdict
 import json
 import logging
 import os
@@ -49,52 +50,66 @@ def search():
 
 @app.schedule('rate(1 hour)')
 def fanned_fetch(event):
-
-    fetch_arn = get_fetch_arn()
-    client = boto3.client('lambda')
-
+    print('fetch rooms')
     for r in Room.get_all():
-        client.invoke_function(
-            FunctionArn=fetch_arn, Event={'Room': r},
-            InvokeType='Event')
+        if r.State != 'Imported':
+            continue
+        result = invoke_fetch(r)
+        print(r)
 
 
 @app.lambda_function()
 def fetch(event, context):
     """Fetch and index
     """
-
     gitter = get_gitter()
-    es = get_es()
-    room = Room.get(event['RoomId'])
-    last = room['LastSeen']
+    room = Room.get(partition_key=event['Room']['ResourceId'], sort_key=None)
+    lastSeen = room.LastSeen != 'True' and room.LastSeen or None
+    direction = (
+        room.State == 'Importing' and MessageIterator.Backward
+        or MessageIterator.Forward)
 
-    while context.time_remaining_in_millis() > 30000:
+    print("Get Room:%s State:%s Last:%s" % (room.Name, room.State, lastSeen))
+    message_iterator = MessageIterator(
+        gitter, room.ResourceId, direction, lastSeen)
+
+    while context.get_remaining_time_in_millis() > 30000:
         buf = []
-        for m in gitter.messages(
-                room['RoomId'], AfterId=room['LastSeen']):
-            m['room'] = room['name']
+        for m in message_iterator:
+            m['room'] = room.Name
             m['from'] = '%s %s' % (
                 m['fromUser']['username'], m['fromUser']['displayName'])
             m['mentioned'] = ' '.join([
-                m['screeName'] for m in m['mentioned']])
-
+                m['screeName'] for m in m['mentions']])
             buf.append({'Data': json.dumps(m)})
             if buf % 100 == 0:
-                last = m['id']
                 break
-
+        if not buf:
+            break
         firehose.put_batch_records(
             DeliveryStreamName=FIREHOSE_STREAM, Records=buf)
-
-#        ops = [{'_index': ELASTICSEARCH_IDX,
-#                '_op_type': 'index',
-#                '_type': 'message',
-#                '_id': m['id'],
-#                'doc': m} for m in buf]
-#        es.bulk(ops)
-        room['LastSeen'] = last
+        print("message batch %s" % buf[-1])
+        room.LastSeen = buf[message_iterator.dir_index]
         room.save()
+        break
+
+    if buf:
+        room.State = 'Importing'
+        room.save()
+        invoke_fetch(room)
+
+    else:
+        room.State = 'Ingested'
+        room.save()
+
+
+def invoke_fetch(room):
+    fetch_arn = get_fetch_arn()
+    client = boto3.client('lambda')
+    return client.invoke(
+        FunctionName=fetch_arn,
+        Payload=json.dumps({'Room': asdict(room)}),
+        InvocationType='Event')
 
 
 def get_fetch_arn():
@@ -103,13 +118,13 @@ def get_fetch_arn():
            "function:{app_name}-{stage}-fetch").format(
                region=os.environ['AWS_REGION'],
                account_id=identity['Account'],
-               app_name=app.app_name,
+               app_name=app.app_name.replace('_', ''),
                stage='dev')
     return arn
 
 
 def get_gitter():
-    token = ssm.get_parameter(Name=TOKEN_PARAMETER)['Paramater']['Value']
+    token = ssm.get_parameter(Name=TOKEN_PARAMETER)['Parameter']['Value']
     return GitterClient(token)
 
 
@@ -118,10 +133,11 @@ def get_es():
     credentials = session.get_credentials().get_frozen_credentials()
     auth = AWS4Auth(
         credentials.access_key, credentials.secret_key,
+        service='es',
         region=os.environ['AWS_DEFAULT_REGION'],
         session_token=credentials.token)
     es = Elasticsearch(hosts=[{
-        'host': ELASTICSEARCH_HOST, 'port': 443}])
+        'host': ELASTICSEARCH_HOST, 'port': 443}], http_auth=auth)
     return es
 
 
@@ -139,6 +155,7 @@ class Room:
     OneToOne: str
     Uri: str
     AvatarUrl: str
+    State: str
 
     @classmethod
     def get_all(cls):
@@ -146,6 +163,33 @@ class Room:
             TableName=cls.__dynamoclass_params__['table_name'])
         for r in result.get('Items'):
             yield cls(**cls._to_dataclass(r))
+
+
+class MessageIterator(object):
+
+    Forward = (-1, 'afterId')
+    Backward = (0, 'beforeId')
+
+    def __init__(self, client, room_id, direction, lastSeen=None):
+        self.client = client
+        self.params = {'roomId': room_id, 'limit': 100}
+        assert (direction == self.Forward
+                or direction == self.Backward), "Unknown direction" % direction
+        self.dir_index, self.dir_key = direction
+        if lastSeen:
+            self.params[self.dir_key] = lastSeen
+        self._buf = None
+
+    def __iter__(self):
+        while True:
+            if not self._buf:
+                self._buf = self.client.messages(**self.params)
+            for m in self._buf:
+                yield m
+            if not self._buf:
+                break
+            self.params[self.dir_key] = self._buf[self.dir_index]['id']
+            self._buf = None
 
 
 class GitterClient(object):
@@ -157,17 +201,15 @@ class GitterClient(object):
         self.token = token
 
     def rooms(self):
-        for r in self._request('/rooms'):
-            yield r
+        return self._request('/rooms')
 
-    def messages(self, room, sinceId=None, beforeId=None):
-        params = {'limit': 1000}
-        if sinceId:
-            params['sinceId'] = sinceId
-
-        for mset in self._request('/rooms/%s' % room['id'], **params):
-            for m in mset:
-                yield m
+    def messages(self, roomId, afterId=None, beforeId=None, limit=100):
+        params = {'limit': limit}
+        if afterId and afterId != 'True':
+            params['afterId'] = afterId
+        elif beforeId:
+            params['beforeId'] = beforeId
+        return self._request('/rooms/%s/chatMessages' % roomId, **params)
 
     def _request(self, path, **params):
         qs = urlencode(params)
@@ -187,5 +229,8 @@ class GitterClient(object):
 
 
 
-
-
+#                '_op_type': 'index',
+#                '_type': 'message',
+#                '_id': m['id'],
+#                'doc': m} for m in buf]
+#        es.bulk(ops)
