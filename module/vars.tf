@@ -7,4 +7,5 @@ variable "resource_tags" {
 
 variable "gitter_token" {
   type = "string"
+
 }

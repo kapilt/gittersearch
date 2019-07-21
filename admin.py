@@ -68,6 +68,6 @@ def add_room(ctx, name):
     print("invoke ingesting")
     print(app.invoke_fetch(r))
 
-    
+
 if __name__ == '__main__':
     cli()

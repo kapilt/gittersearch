@@ -9,7 +9,7 @@ import requests
 import boto3
 from chalice import Chalice
 from dynamoclasses import dynamoclass
-from elasticsearch import Elasticsearch
+from elasticsearch import Elasticsearch, RequestsHttpConnection
 from requests_aws4auth import AWS4Auth
 
 TOKEN_PARAMETER = os.environ.get('GITTER_TOKEN_PARAM')
@@ -73,6 +73,8 @@ def fetch(event, context):
     message_iterator = MessageIterator(
         gitter, room.ResourceId, direction, lastSeen)
 
+    message_count = 0
+
     while context.get_remaining_time_in_millis() > 30000:
         buf = []
         for m in message_iterator:
@@ -80,27 +82,28 @@ def fetch(event, context):
             m['from'] = '%s %s' % (
                 m['fromUser']['username'], m['fromUser']['displayName'])
             m['mentioned'] = ' '.join([
-                m['screeName'] for m in m['mentions']])
+                m['screenName'] for m in m['mentions']])
             buf.append({'Data': json.dumps(m)})
-            if buf % 100 == 0:
+            if len(buf) % 100 == 0:
                 break
         if not buf:
             break
-        firehose.put_batch_records(
+        firehose.put_record_batch(
             DeliveryStreamName=FIREHOSE_STREAM, Records=buf)
-        print("message batch %s" % buf[-1])
-        room.LastSeen = buf[message_iterator.dir_index]
+        message_count += len(buf)
+        room.LastSeen = json.loads(
+            buf[message_iterator.dir_index]['Data'])['id']
         room.save()
-        break
 
     if buf:
         room.State = 'Importing'
         room.save()
         invoke_fetch(room)
-
     else:
         room.State = 'Ingested'
         room.save()
+
+    return message_count
 
 
 def invoke_fetch(room):
@@ -132,12 +135,17 @@ def get_es():
     session = boto3.Session()
     credentials = session.get_credentials().get_frozen_credentials()
     auth = AWS4Auth(
-        credentials.access_key, credentials.secret_key,
-        service='es',
-        region=os.environ['AWS_DEFAULT_REGION'],
+        credentials.access_key,
+        credentials.secret_key,
+        os.environ['AWS_DEFAULT_REGION'],
+        'es',
         session_token=credentials.token)
     es = Elasticsearch(hosts=[{
-        'host': ELASTICSEARCH_HOST, 'port': 443}], http_auth=auth)
+        'host': ELASTICSEARCH_HOST, 'port': 443}],
+        http_auth=auth,
+        use_ssl=True,
+        verify_certs=True,
+        connection_class=RequestsHttpConnection)
     return es
 
 

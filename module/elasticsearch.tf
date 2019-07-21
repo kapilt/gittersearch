@@ -38,7 +38,30 @@ resource "aws_elasticsearch_domain_policy" "gitter_access" {
             "Principal": {"AWS": "${aws_iam_role.gitter_firehose.arn}"},
             "Effect": "Allow",
             "Resource": "${aws_elasticsearch_domain.gitter.arn}/*"
+        },
+        {
+            "Action": "es:*",
+            "Principal": {"AWS": "arn:aws:iam::619193117841:user/deputy"},
+            "Effect": "Allow",
+            "Resource": "${aws_elasticsearch_domain.gitter.arn}/*"
+        },
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "*"
+      },
+      "Action": [
+        "es:*"
+      ],
+      "Condition": {
+        "IpAddress": {
+          "aws:SourceIp": [
+            "173.79.14.27"
+          ]
         }
+      },
+      "Resource": "${aws_elasticsearch_domain.gitter.arn}/*"
+    }
     ]
 }
 POLICIES
