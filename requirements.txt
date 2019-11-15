@@ -23,7 +23,7 @@ doc8==0.8.0
 docker==4.0.2
 docutils==0.14
 -e git+https://github.com/kapilt/dynamoclasses.git@48c29971fe2c8b2c07f3e62c42ea07385a9e6faa#egg=dynamoclasses
-ecdsa==0.13.2
+ecdsa==0.13.3
 elasticsearch==7.0.2
 elasticsearch-dsl==7.0.0
 enum-compat==0.0.2
