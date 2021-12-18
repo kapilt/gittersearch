@@ -3,6 +3,7 @@ https://ghe.clickhouse.tech
 """
 from dataclasses import dataclass, field, fields
 from datetime import datetime
+import difflib
 from enum import Enum
 
 from clickhouse_driver import Client
@@ -148,12 +149,12 @@ class GithubEvent:
     closed_at: datetime = F(rdb.DateTime)
     merged_at: datetime = F(rdb.DateTime)
     merge_commit_sha: str = F(rdb.String)
-    requested_reviewers: F(Array(rdb.String), None) # x
-    requested_teams: F(Array(rdb.String), None) # x
-    head_ref: F(rdb.String, None) # x
-    head_sha: F(rdb.String, None) # x
-    base_ref: F(rdb.String, None) # x
-    base_sha: F(rdb.String, None) # x
+    requested_reviewers: F(Array(rdb.String), None)  # x
+    requested_teams: F(Array(rdb.String), None)  # x
+    head_ref: F(rdb.String, None)  # x
+    head_sha: F(rdb.String, None)  # x
+    base_ref: F(rdb.String, None)  # x
+    base_sha: F(rdb.String, None)  # x
     merged: F(rdb.SmallInteger, None)  # bool
     mergeable: F(rdb.SmallInteger, None)  # bool
     rebaseable: F(rdb.SmallInteger, None)  # bool

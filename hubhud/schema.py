@@ -20,12 +20,11 @@ class SQLiteArray(rdb.types.TypeDecorator):
         return ",".join(value)
 
     def process_result_value(self, value, dialect):
-        return value.split(',')
+        return value.split(",")
 
 
 def Array(ctype):
-    return rdb.ARRAY(ctype).with_variant(SQLiteArray(ctype), 'sqlite')
-
+    return rdb.ARRAY(ctype).with_variant(SQLiteArray(ctype), "sqlite")
 
 
 def F(ctype, default=()):
@@ -34,7 +33,7 @@ def F(ctype, default=()):
         md = {"sa": ctype}
     else:
         md = {"sa": rdb.Column(ctype)}
-    params = {'metadata': md}
+    params = {"metadata": md}
     if default != ():
         params["default"] = default
     return field(**params)

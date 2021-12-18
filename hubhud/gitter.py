@@ -1,10 +1,9 @@
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 import logging
 import operator
 import os
 import requests
 import time
-from typing import Optional
 from urllib.parse import urlencode
 
 import sqlalchemy as rdb
@@ -19,7 +18,7 @@ TOKEN_PARAMETER = os.environ.get("GITTER_TOKEN")
 @dataclass
 class Room:
 
-    __tablename__ = 'gitter_room'
+    __tablename__ = "gitter_room"
     __sa_dataclass_metadata_key__ = "sa"
 
     # Room ID.
@@ -44,7 +43,7 @@ class Room:
     # Path to the room on gitter.
     url: str = F(rdb.String)
     # Type of the room.
-    githubType: str = F(rdb.String) # enum?
+    githubType: str = F(rdb.String)  # enum?
     # Tags that define the room.
     tags: list[str] = F(Array(rdb.String))
     # Index via gitter search
@@ -84,7 +83,7 @@ class Room:
 @dataclass
 class Message:
 
-    __tablename__ = 'gitter_messages'
+    __tablename__ = "gitter_messages"
     __sa_dataclass_metadata_key__ = "sa"
 
     # ID of the message.
@@ -187,8 +186,7 @@ class GitterClient(object):
     log = logging.getLogger("gitter")
     default_request_interval = 1
 
-    def __init__(self,
-                 token=TOKEN_PARAMETER, endpoint="https://api.gitter.im/v1"):
+    def __init__(self, token=TOKEN_PARAMETER, endpoint="https://api.gitter.im/v1"):
         self.endpoint = endpoint
         self.token = token
         assert token, "set GITTER_TOKEN environment variable"
@@ -244,9 +242,9 @@ def get_messages(project, since=None):
             break
 
     if not found:
-        raise ValueError('project %s room not found' % project)
+        raise ValueError("project %s room not found" % project)
 
     for m in MessageIterator(
-            client, found.id, direction=MessageIterator.Forward,
-            lastSeen=since):
+        client, found.id, direction=MessageIterator.Forward, lastSeen=since
+    ):
         yield m
