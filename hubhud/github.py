@@ -5,11 +5,15 @@ from dataclasses import dataclass, field, fields
 from datetime import datetime
 import difflib
 from enum import Enum
+import logging
 
 from clickhouse_driver import Client
 import sqlalchemy as rdb
 
 from .schema import mapper_registry, F, Array
+
+
+log = logging.getLogger("hubhud.github")
 
 
 class EventType(Enum):
@@ -233,3 +237,25 @@ def get_client():
         user="explorer",
         host="gh-api.clickhouse.tech",
     )
+
+
+def sync(session, project: str, rename: str):
+    last = (
+        session.query(GithubEvent)
+        .order_by(rdb.desc(GithubEvent.created_at))
+        .limit(1)
+        .one_or_none()
+    )
+    params = {}
+    if last:
+        params["start"] = last.created_at
+    count = 0
+    for e in get_events(project, **params):
+        if rename:
+            e.repo_name = rename
+        session.add(e)
+        count += 1
+        if count % 1000 == 0:
+            log.info("added %d events for %s", count, project)
+    session.commit()
+    return count

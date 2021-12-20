@@ -1,5 +1,6 @@
 from dataclasses import field
 
+from dateutil.parser import parse as parse_date
 import sqlalchemy as rdb
 from sqlalchemy.orm import registry
 
@@ -25,6 +26,17 @@ class SQLiteArray(rdb.types.TypeDecorator):
 
 def Array(ctype):
     return rdb.ARRAY(ctype).with_variant(SQLiteArray(ctype), "sqlite")
+
+
+class ISODate(rdb.types.TypeDecorator):
+
+    impl = rdb.DateTime
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if isinstance(value, str):
+            return parse_date(value)
+        return value
 
 
 def F(ctype, default=()):

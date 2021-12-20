@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from dataclasses import dataclass
 import logging
 import operator
@@ -8,7 +9,7 @@ from urllib.parse import urlencode
 
 import sqlalchemy as rdb
 
-from .schema import mapper_registry, F, Array
+from .schema import mapper_registry, F, Array, ISODate
 
 
 TOKEN_PARAMETER = os.environ.get("GITTER_TOKEN")
@@ -68,7 +69,7 @@ class Room:
     # List of users in the room. (Deprecated? subresource actually)
     users: list = F(rdb.String, None)
     # Last time the current user accessed the room in ISO format.
-    lastAccessTime: str = F(rdb.DateTime, None)
+    lastAccessTime: str = F(ISODate, None)
     # Direct messaging User
     user: dict = F(rdb.JSON, None)
     # Indicates if the room is on of your favourites.
@@ -88,12 +89,14 @@ class Message:
 
     # ID of the message.
     id: str = F(rdb.Column(rdb.String, primary_key=True))
+    # Track which github project we're referencing
+    project: str = F(rdb.String)
     # Original message in plain-text/markdown.
     text: str = F(rdb.String)
     # HTML formatted message.
     html: str = F(rdb.String)
     # ISO formatted date of the message.
-    sent: str = F(rdb.DateTime)
+    sent: str = F(ISODate)
 
     # (User)[user-resource] that sent the message.
     fromUser: dict = F(rdb.JSON)
@@ -102,11 +105,11 @@ class Message:
     # Number of users that have read the message.
     readBy: int = F(rdb.SmallInteger)
     # List of URLs present in the message.
-    urls: list = F(Array(rdb.String))
+    urls: list = F(rdb.JSON)
     # List of @Mentions in the message.
-    mentions: list = F(Array(rdb.String))
+    mentions: list = F(rdb.JSON)
     # List of #Issues referenced in the message.
-    issues: list = F(Array(rdb.String))
+    issues: list = F(rdb.JSON)
     # Metadata. This is currently not used for anything.
     meta: dict = F(rdb.JSON)
     # Version.
@@ -122,7 +125,7 @@ class Message:
     # Virtual User from matrix
     virtualUser: dict = F(rdb.JSON, None)
     # If message was edited
-    editedAt: str = F(rdb.DateTime, None)
+    editedAt: str = F(ISODate, None)
 
 
 @dataclass
@@ -144,14 +147,16 @@ class User:
 class MessageIterator(object):
 
     Forward = (-1, "afterId")
-    Backward = (0, "beforeId")
+    Backward = (-1, "beforeId")
     BatchSize = 100
 
     _date_field = operator.itemgetter("sent")
 
-    def __init__(self, client, room_id, direction=None, lastSeen=None):
+    def __init__(self, client, room: Room, direction=None, lastSeen=None):
         self.client = client
-        self.params = {"roomId": room_id, "limit": self.BatchSize}
+        self.room = room
+        self.params = {"roomId": self.room.id, "limit": self.BatchSize}
+        self.project = room.uri
 
         if direction is None:
             direction = self.Backward
@@ -169,6 +174,7 @@ class MessageIterator(object):
             if not self._buf:
                 self._buf = self._msort(self.client.messages(**self.params))
             for m in self._buf:
+                m["project"] = self.project
                 yield Message(**m)
             if not self._buf:
                 break
@@ -176,7 +182,7 @@ class MessageIterator(object):
             self._buf = None
 
     def _msort(self, messages):
-        if self.dir_index == 0:
+        if self.dir_key == "beforeId":
             return sorted(messages, key=self._date_field, reverse=True)
         return messages
 
@@ -192,7 +198,17 @@ class GitterClient(object):
         assert token, "set GITTER_TOKEN environment variable"
         self._interval_requests = 0
 
-    def rooms(self):
+    def get_room(self, project: str) -> Room:
+        found = False
+        for r in self.rooms():
+            if r.uri == project:
+                found = r
+                break
+        if not found:
+            raise ValueError("project %s room not found" % project)
+        return found
+
+    def rooms(self) -> list[Room]:
         return [Room(**r) for r in self._request("/rooms")]
 
     def messages(self, roomId, afterId=None, beforeId=None, limit=100):
@@ -232,19 +248,55 @@ class GitterClient(object):
         return r.json()
 
 
-def get_messages(project, since=None):
-    client = GitterClient()
-
-    found = False
-    for r in client.rooms():
-        if r.uri == project:
-            found = r
-            break
-
-    if not found:
-        raise ValueError("project %s room not found" % project)
-
-    for m in MessageIterator(
-        client, found.id, direction=MessageIterator.Forward, lastSeen=since
-    ):
+def get_messages(client: GitterClient, room: Room, since=None) -> Iterator[Message]:
+    direction = since and MessageIterator.Forward or MessageIterator.Backward
+    for m in MessageIterator(client, room, direction=direction, lastSeen=since):
         yield m
+
+
+def sync(session, project: str) -> int:
+
+    # sync everything, we have to walk pointers from latest to oldest, which
+    # means we'll be layering in to storage new, new-1,.. old.. when we
+    # sync later we'll be in forward order with old, newer, latest.
+    client = GitterClient()
+    room = client.get_room(project)
+
+    last = (
+        session.query(Message).order_by(rdb.desc(Message.sent)).limit(1).one_or_none()
+    )
+    since = last and last.id or None
+
+    count = 0
+    seen = set()
+    earliest, latest = None, None
+    time_buffer = time.time()
+
+    for m in get_messages(client, room, since):
+        if m.id in seen:
+            continue
+        else:
+            seen.add(m.id)
+        if earliest and m.sent < earliest.sent:
+            earliest = m
+        elif earliest is None:
+            earliest = m
+
+        if latest and m.sent > latest.sent:
+            latest = m
+        elif latest is None:
+            latest = m
+
+        session.add(m)
+        count += 1
+        if count % 100 == 0:
+            print(
+                "sync from %s to %s in %0.2f"
+                % (earliest.sent, latest.sent, time.time() - time_buffer)
+            )
+            session.commit()
+            earliest, latest = None, None
+            time_buffer = time.time()
+
+    session.commit()
+    return count
