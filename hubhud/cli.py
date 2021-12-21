@@ -1,10 +1,19 @@
-import click
 import logging
+import time
 
+import click
 from sqlalchemy.orm import Session
 
 from .github import sync as github_sync
 from .gitter import sync as gitter_sync
+
+try:
+    from .search import index as search_index
+    from .search import search as query_index
+except ImportError:
+    search_index = None
+    query_index = None
+
 from .schema import get_db
 
 log = logging.getLogger("hubhud")
@@ -16,6 +25,39 @@ def cli():
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s: %(name)s:%(levelname)s %(message)s"
     )
+
+
+@cli.group()
+def search():
+    """Search for information"""
+
+
+@search.command()
+@click.option("-i", "--index", type=click.Path(), required=True)
+@click.option("-q", "--query", required=True)
+def query(index, query):
+
+    t = time.time()
+    results = query_index(index, query)
+    log.info("queried messages in %0.2f", time.time() - t)
+    for r in results:
+        print((
+            f"score: {r['score']}"
+            f" sent: {r['doc']['sent'][0]}"
+            f" author: {r['doc']['author'][0]}"
+            f" body:\n{r['doc']['body'][0]}\n"
+        ))
+
+
+@search.command()
+@click.option("-f", "--db", envvar="HUD_DB", required=True)
+@click.option("-i", "--index", type=click.Path(), required=True)
+def index(db, index):
+    log.info("indexing messages for search")
+    engine = get_db(db)
+    with Session(engine) as s:
+        count = search_index(s, index)
+    log.info("finished - indexed %d messages", count)
 
 
 @cli.group()
