@@ -1,5 +1,5 @@
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 import logging
 import operator
 import os
@@ -7,6 +7,7 @@ import requests
 import time
 from urllib.parse import urlencode
 
+from dateutil.parser import parse as parse_date
 import sqlalchemy as rdb
 
 from .schema import mapper_registry, F, Array, ISODate
@@ -126,6 +127,32 @@ class Message:
     virtualUser: dict = F(rdb.JSON, None)
     # If message was edited
     editedAt: str = F(ISODate, None)
+    # if message is in subthread
+    parent: str = F(rdb.String, None)
+    # extract author username from fromUser
+    author: str = F(rdb.String, None)
+
+    @classmethod
+    def new(cls, data):
+        if "sent" in data:
+            data["sent"] = parse_date(data["sent"], ignoretz=True)
+        if "editedAt" in data:
+            data["editedAt"] = parse_date(data["editedAt"], ignoretz=True)
+        if "parentId" in data:
+            data["parent"] = data.pop("parentId")
+        if "fromUser" in data:
+            data["author"] = data["fromUser"]["username"]
+        return cls(**data)
+
+    def update(self, other):
+        results = []
+        for f in fields(Message):
+            ov = getattr(other, f.name)
+            sv = getattr(self, f.name)
+            if ov != sv:
+                setattr(self, f.name, ov)
+                results.append(f.name)
+        return results
 
 
 @dataclass
@@ -175,11 +202,27 @@ class MessageIterator(object):
                 self._buf = self._msort(self.client.messages(**self.params))
             for m in self._buf:
                 m["project"] = self.project
-                yield Message(**m)
+                m = Message.new(m)
+                yield m
+                for t in self.iter_thread(m):
+                    t["project"] = self.project
+                    yield Message.new(t)
             if not self._buf:
                 break
             self.params[self.dir_key] = self._buf[self.dir_index]["id"]
             self._buf = None
+
+    def iter_thread(self, m):
+        if not m.threadMessageCount:
+            return
+        # its possible we can lose some messages for deep > 50
+        # threads without pagination here. in practice these are
+        # very rare, like we have one in five years (38k threads)
+
+        # threads come in as a tail follow
+        thread = self.client.message_thread(self.room.id, m.id)
+        for t in thread:
+            yield t
 
     def _msort(self, messages):
         if self.dir_key == "beforeId":
@@ -220,6 +263,12 @@ class GitterClient(object):
         response = self._request("/rooms/%s/chatMessages" % roomId, **params)
         return response
 
+    def message_thread(self, roomId, parentId):
+        response = self._request(
+            "/rooms/%s/chatMessages/%s/thread" % (roomId, parentId)
+        )
+        return response
+
     def _throttle_rate(self, r):
         remaining = int(r.headers.get("X-RateLimit-Remaining", 1000))
         if remaining > 10:
@@ -254,6 +303,10 @@ def get_messages(client: GitterClient, room: Room, since=None) -> Iterator[Messa
         yield m
 
 
+def update(cur, new):
+    pass
+
+
 def sync(session, project: str) -> int:
 
     # sync everything, we have to walk pointers from latest to oldest, which
@@ -262,21 +315,34 @@ def sync(session, project: str) -> int:
     client = GitterClient()
     room = client.get_room(project)
 
-    last = (
-        session.query(Message).order_by(rdb.desc(Message.sent)).limit(1).one_or_none()
-    )
-    since = last and last.id or None
+    # resync last 30 messages to ensure we pick up new message edits or
+    # threaded conversations.
+    last = session.execute(
+        rdb.select(Message)
+        .filter_by(project=project)
+        .order_by(rdb.desc(Message.sent))
+        .limit(30)
+    ).all()
+
+    since = last and last[-1][0].id or None
 
     count = 0
-    seen = set()
     earliest, latest = None, None
     time_buffer = time.time()
 
     for m in get_messages(client, room, since):
-        if m.id in seen:
-            continue
-        else:
-            seen.add(m.id)
+        # check if we're updating an existing message
+        o = session.get(Message, m.id)
+        if o is not None:
+            if o != m:
+                o.update(m)
+                m = o
+            else:
+                continue
+
+        session.add(m)
+
+        # bookeeping for logs
         if earliest and m.sent < earliest.sent:
             earliest = m
         elif earliest is None:
@@ -287,7 +353,6 @@ def sync(session, project: str) -> int:
         elif latest is None:
             latest = m
 
-        session.add(m)
         count += 1
         if count % 100 == 0:
             print(
