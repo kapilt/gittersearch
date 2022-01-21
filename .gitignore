@@ -10,3 +10,4 @@ module/.terraform
 module/deployment.zip
 module/chalice.tf.json
 module/*tfstate*
+*.db
