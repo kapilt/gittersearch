@@ -252,7 +252,10 @@ class GitterClient(object):
         return found
 
     def rooms(self) -> list[Room]:
-        return [Room(**r) for r in self._request("/rooms")]
+        return [
+            Room(**{k: r[k] for k in r if k in Room.__mapper__.column_attrs})
+            for r in self._request("/rooms")
+        ]
 
     def messages(self, roomId, afterId=None, beforeId=None, limit=100):
         params = {"limit": limit}
