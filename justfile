@@ -17,6 +17,6 @@ test:
 
 
 sync db="sqlite:///data.db":
+   python -m hubhud.cli sync github -f {{db}} -p {{project}}
    python -m hubhud.cli sync gitter -f {{db}} -p {{project}}
-#   python -m hubhud.cli sync github -f {{db}} -p {{project}}
 

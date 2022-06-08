@@ -235,7 +235,7 @@ def get_client():
     return Client(
         secure=True,
         user="explorer",
-        host="gh-api.clickhouse.tech",
+        host="play.clickhouse.com",
     )
 
 
